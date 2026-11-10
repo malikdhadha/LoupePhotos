@@ -276,18 +276,28 @@ struct CropOverlay: View {
     @State private var grab = 0          // 1 move, 2 top-left, 3 top-right, 4 bottom-left, 5 bottom-right, 6 left, 7 right, 8 top, 9 bottom, 10 turn, 11 ruler
     @State private var turnFrom: (a0: Double, angle: Double) = (0, 0)
     @State private var line: (CGPoint, CGPoint)?
+    @AppStorage("crop.guideStrength") private var strength = 1   // 0 Subtle, 1 Normal, 2 Strong
 
+    /// White lines on a soft dark edge, so they show on bright skies and dark shadows alike.
+    @ViewBuilder func lines(_ path: Path, width: CGFloat, white: Double, dark: Double) -> some View {
+        path.stroke(Color.black.opacity(dark), lineWidth: width + 1.5)
+        path.stroke(Color.white.opacity(white), lineWidth: width)
+    }
     var body: some View {
         let c = live ?? crop
         let r = CGRect(x: ir.minX + c.minX * ir.width, y: ir.minY + c.minY * ir.height, width: c.width * ir.width, height: c.height * ir.height)
         let dragging = grab != 0
         ZStack {
             Path { p in p.addRect(ir); p.addRect(r) }.fill(Color.black.opacity(0.55), style: FillStyle(eoFill: true))
+            let st = max(0, min(2, strength))
+            let w: CGFloat = [0.75, 1, 1.4][st], white = [0.5, 0.8, 0.95][st], dark = [0.25, 0.4, 0.55][st]
+            let lift = dragging ? 0.15 : 0
             if grab == 10 || grab == 11 {
-                CropGuide.grid.path(in: r.insetBy(dx: 0, dy: 0), turn: 0).stroke(Color.white.opacity(0.35), lineWidth: 0.5)
+                lines(CropGuide.grid.path(in: r, turn: 0), width: w * 0.75, white: min(1, white * 0.8 + lift), dark: dark)
             } else if show == 0 || (show == 1 && dragging) {
-                guide.path(in: r, turn: turn).stroke(Color.white.opacity(dragging ? 0.6 : 0.35), lineWidth: 0.75)
+                lines(guide.path(in: r, turn: turn), width: w, white: min(1, white + lift), dark: dark)
             }
+            Path { p in p.addRect(r) }.stroke(Color.black.opacity(0.4), lineWidth: 3)
             Path { p in p.addRect(r) }.stroke(Color.white, lineWidth: 1)
             Path { p in
                 let L: CGFloat = 16
@@ -519,6 +529,7 @@ struct ProfileRow: View {
 struct BrickView: View {
     let brick: Brick
     @State private var m = DevelopModel.shared
+    @AppStorage("crop.guideStrength") private var guideStrength = 1
     var open: Bool { m.expanded.contains(brick.rawValue) }
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -604,6 +615,12 @@ struct BrickView: View {
                 Picker("", selection: Binding(get: { m.guideShow }, set: { m.guideShow = $0 })) {
                     Text("Always").tag(0); Text("While Dragging").tag(1); Text("Never").tag(2)
                 }.labelsHidden().controlSize(.small)
+            }
+            HStack {
+                Text("Lines").font(.caption).foregroundStyle(.secondary).frame(width: 80, alignment: .trailing)
+                Picker("", selection: $guideStrength) {
+                    Text("Subtle").tag(0); Text("Normal").tag(1); Text("Strong").tag(2)
+                }.labelsHidden().pickerStyle(.segmented).controlSize(.small).help("How strongly the guide lines show over the photo")
             }
             HStack(spacing: 6) {
                 Spacer().frame(width: 80)

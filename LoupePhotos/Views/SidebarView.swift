@@ -208,6 +208,7 @@ struct SidebarView: View {
         }
         .sheet(item: $editing) { a in SmartCollectionEditor(album: a, isNew: lib.collection(a.id) == nil) }
         .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) { SidebarActions() }
         .onAppear(perform: rebuild)
         // quick bursts of changes (holding a key, rating many photos) are counted once
         // while Background Tasks run, the library changes all the time: recount at most every 3 seconds then
@@ -676,3 +677,26 @@ struct PlaceNode: Identifiable { let id: String; let name: String; let count: In
 struct MarkNode: Identifiable { let id: String; let name: String; let icon: String; let hex: UInt32?; let count: Int?; let source: Source?; let children: [MarkNode]? }
 
 struct KeyNode: Identifiable { let id: String; let name: String; let children: [KeyNode]? }
+
+/// Import… and Export… at the foot of the sidebar, as in Lightroom Classic. They stay put while the sidebar scrolls.
+struct SidebarActions: View {
+    @Environment(UIState.self) private var ui
+    @Environment(\.openWindow) private var openWindow
+    var body: some View {
+        // counted from the selection alone, so selecting everything doesn't build a list on every redraw
+        let n = ui.selection.isEmpty ? (ui.primary == nil ? 0 : 1) : ui.selection.count
+        VStack(spacing: 0) {
+            Divider()
+            HStack(spacing: 8) {
+                Button { openWindow(id: "import") } label: { Text("Import…").frame(maxWidth: .infinity) }
+                    .help("Import photos from a card or folder (⇧⌘I)")
+                Button { ui.showExport = true } label: { Text(n > 1 ? "Export \(n.formatted())…" : "Export…").lineLimit(1).frame(maxWidth: .infinity) }
+                    .disabled(n == 0)
+                    .help(n == 0 ? "Select photos to export" : "Export the selected photo\(n == 1 ? "" : "s") (⇧⌘E)")
+            }
+            .controlSize(.large)
+            .padding(.horizontal, 10).padding(.vertical, 10)
+        }
+        .background(.bar)
+    }
+}

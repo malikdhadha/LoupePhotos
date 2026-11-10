@@ -14,10 +14,16 @@ struct LoupePhotosApp: App {
                 .environment(lib)
                 .environment(ui)
                 .frame(minWidth: 980, minHeight: 600)
-                .onAppear { if !lib.loaded { lib.openDefault() } }
+                .onAppear {
+                    guard !lib.loaded else { return }
+                    // the splash first, so it's on screen while the catalog opens
+                    Splash.shared.show()
+                    DispatchQueue.main.async { lib.openDefault(); Splash.shared.ready(lib.photos.count) }
+                }
         }
         .windowToolbarStyle(.unified)
         .commands {
+            CommandGroup(replacing: .appInfo) { Button("About \(Splash.appName)") { Splash.shared.showAbout() } }
             CommandGroup(replacing: .newItem) {
                 ImportMenuItem()
                 Button("Add Folder…") { ui.addFolder(lib) }.keyboardShortcut("i", modifiers: [.command, .shift, .option])
@@ -134,6 +140,7 @@ struct LoupePhotosApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) { if !Library.shared.loaded { Splash.shared.show() } }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply { CatalogBackup.shared.onQuit(sender) }
     func applicationWillTerminate(_ notification: Notification) { if !CatalogBackup.shared.restoring { Library.shared.close() } }

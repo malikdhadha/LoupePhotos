@@ -250,8 +250,13 @@ struct LibrarySettingsView: View {
     @AppStorage("backup.keep") private var backupKeep = 10
     @AppStorage("backup.folder") private var backupFolder = ""
     @AppStorage("backup.last") private var backupLast = 0.0
+    @AppStorage("splash.show") private var splash = true
     var body: some View {
         Form {
+            Section("Launch") {
+                Toggle("Show the splash screen while the catalog opens", isOn: $splash)
+                Button("Show It Now") { Splash.shared.showAbout() }
+            }
             Section("Catalog backup") {
                 Picker("Back up the catalog", selection: $backupWhen) {
                     ForEach(CatalogBackup.When.allCases) { Text($0.rawValue).tag($0.rawValue) }
