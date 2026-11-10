@@ -266,24 +266,65 @@ final class DevelopEngine: @unchecked Sendable {
         if cropped, let c = r.activeCrop { return max(size.width * c.width, size.height * c.height) }
         return max(size.width, size.height)
     }
+    // MARK: the developed RAW, kept for Develop
+    // Developing a RAW (RAW 9's machine-learning demosaic and noise reduction) is by far the slowest step.
+    // Develop keeps the result for the photo on screen, so moving Exposure-brick-and-below sliders only redraws
+    // from it; the RAW is developed again only when something the RAW engine does changes (white balance,
+    // RAW exposure, noise reduction, RAW fine tuning, version, profile).
+    private let keepLock = NSLock()
+    private var kept: [(key: String, image: CIImage, scale: Double)] = []      // the last few, newest last
+    private var sizes: [String: CGSize] = [:]                                     // each RAW's developed size
+    /// Everything that changes what the RAW engine itself makes.
+    private func rawKey(_ src: Source, _ r: Recipe, profile: String) -> String {
+        var k = "\(src.url.path)|\(r.decoder ?? UserDefaults.standard.string(forKey: "develop.decoder") ?? "latest")|\(profile)"
+        if r.on(.raw) { k += "|r\(r.has(.boost) ? r.v(.boost) : -9),\(r.has(.boostShadow) ? r.v(.boostShadow) : -9),\(r.has(.rawSharp) ? r.v(.rawSharp) : -9),\(r.has(.moire) ? r.v(.moire) : -9),\(r.has(.lens) ? r.v(.lens) : -9)" }
+        if r.on(.wb) { k += "|w\(r.has(.temp) ? r.v(.temp) : -9),\(r.has(.tint) ? r.v(.tint) : -9)" }
+        if r.on(.exposure) { k += "|e\(r.v(.exposure))" }
+        if r.on(.nr) { k += "|n\(r.v(.nrLum)),\(r.v(.nrColor))" }
+        return k
+    }
+    /// Forget the kept RAWs (leaving Develop).
+    func forgetKept() { keepLock.lock(); kept = []; keepLock.unlock() }
+
     /// A RAW file developed by Apple's RAW engine, scaled so the output is about `maxPixel` (nil = full size).
-    func rawBase(_ src: Source, _ r: Recipe, maxPixel: Int?, cropped: Bool = true) -> (CIImage, Double)? {
-        guard let f = CIRAWFilter(imageURL: src.url) else { return nil }
-        configure(f, r)
-        guard let full = f.outputImage?.extent, full.width > 0 else { return nil }
-        var s = 1.0
-        if let m = maxPixel { s = min(1, Double(m) / outputLong(full.size, r, cropped: cropped)) }
-        if s < 0.999 { f.scaleFactor = Float(s) }
-        guard let o = f.outputImage else { return nil }
-        // the starting look: what the camera's LCD showed (Camera Match), the camera's learned profile, or Apple's own
+    /// `keep`: Develop's own drawing — the result is kept and reused while only later adjustments change.
+    func rawBase(_ src: Source, _ r: Recipe, maxPixel: Int?, cropped: Bool = true, keep: Bool = false) -> (CIImage, Double)? {
         let prof = RawProfile(rawValue: r.s["profile"] ?? "") ?? RawProfile.defaultChoice
-        if let (key, lut) = CameraMatchStore.shared.lut(id: src.id, model: src.model, profile: prof) {
-            let out = o.applyingFilter("CIColorCubeWithColorSpace", parameters: [
-                "inputCubeDimension": CameraLUT.n, "inputCubeData": CameraMatchStore.shared.cube(key, lut),
-                "inputColorSpace": CGColorSpace(name: CGColorSpace.sRGB)!])
-            return (out, s)
+        let lut = CameraMatchStore.shared.lut(id: src.id, model: src.model, profile: prof)
+        let rk = rawKey(src, r, profile: lut?.0 ?? "apple")
+        var f: CIRAWFilter?
+        keepLock.lock(); var size = sizes[rk]; keepLock.unlock()
+        if size == nil {
+            guard let nf = CIRAWFilter(imageURL: src.url) else { return nil }
+            configure(nf, r)
+            guard let full = nf.outputImage?.extent, full.width > 0 else { return nil }
+            size = full.size; f = nf
+            keepLock.lock(); sizes[rk] = full.size; if sizes.count > 200 { sizes = [rk: full.size] }; keepLock.unlock()
         }
-        return (o, s)
+        var s = 1.0
+        if let m = maxPixel, let size { s = min(1, Double(m) / outputLong(size, r, cropped: cropped)) }
+        let key = rk + "|s\(Int((s * 2000).rounded()))"
+        if keep {
+            keepLock.lock(); let hit = kept.first { $0.key == key }; keepLock.unlock()
+            if let hit { return (hit.image, hit.scale) }
+        }
+        let t0 = CFAbsoluteTimeGetCurrent()
+        if f == nil { guard let nf = CIRAWFilter(imageURL: src.url) else { return nil }; configure(nf, r); f = nf }
+        guard let f else { return nil }
+        if s < 0.999 { f.scaleFactor = Float(s) }
+        guard var o = f.outputImage else { return nil }
+        // the starting look: what the camera's LCD showed (Camera Match), the camera's learned profile, or Apple's own
+        if let (lk, l) = lut {
+            o = o.applyingFilter("CIColorCubeWithColorSpace", parameters: [
+                "inputCubeDimension": CameraLUT.n, "inputCubeData": CameraMatchStore.shared.cube(lk, l),
+                "inputColorSpace": CGColorSpace(name: CGColorSpace.sRGB)!])
+        }
+        // kept as a finished picture (half-float, so bright highlights survive for Recovery), not as a recipe to redo
+        guard keep, maxPixel != nil, let cg = ctx.createCGImage(o, from: o.extent, format: .RGBAh, colorSpace: linear) else { return (o, s) }
+        let im = CIImage(cgImage: cg).transformed(by: CGAffineTransform(translationX: o.extent.minX, y: o.extent.minY))
+        keepLock.lock(); kept.append((key, im, s)); if kept.count > 3 { kept.removeFirst(kept.count - 3) }; keepLock.unlock()
+        Timing.note("develop: RAW developed \(cg.width)×\(cg.height)", since: t0, always: true)
+        return (im, s)
     }
     /// A JPEG, HEIC, PNG or TIFF read at about `maxPixel` on its long edge (nil = full size), the right way up.
     func decode(_ src: Source, maxPixel: Int?) -> (CIImage, Double)? {
@@ -434,7 +475,7 @@ final class DevelopEngine: @unchecked Sendable {
     /// For the Develop page: turned by your rotation, uncropped while cropping. `base` is the image already read (not RAW).
     func display(_ src: Source, _ r: Recipe, base: (CIImage, Double)?, maxPixel: Int, skipCrop: Bool, rot: Int) -> CGImage? {
         let b: (CIImage, Double)?
-        if src.isRaw { b = rawBase(src, r, maxPixel: maxPixel, cropped: !skipCrop) } else { b = base ?? decode(src, maxPixel: maxPixel) }
+        if src.isRaw { b = rawBase(src, r, maxPixel: maxPixel, cropped: !skipCrop, keep: true) } else { b = base ?? decode(src, maxPixel: maxPixel) }
         guard let (im, s) = b else { return nil }
         var out = adjust(im, r, isRaw: src.isRaw, scale: s, skipCrop: skipCrop)
         let q = ((rot % 4) + 4) % 4
@@ -712,6 +753,7 @@ final class DevelopModel {
         if gestureStart != nil { commit() }
         cropping = false; picking = false; zoomed = false; showBefore = false
         DevelopStore.shared.flush()
+        DevelopEngine.shared.forgetKept()
     }
     /// Another part of the app changed this photo's adjustments (Paste, Revert from the menu).
     func reloadIfShowing(_ id: Int) {
@@ -730,9 +772,12 @@ final class DevelopModel {
         rendering = true; dirty = false; busy = true
         let r = recipe, px = draft ? displayPx * 6 / 10 : displayPx, skip = cropping, rot = self.rot, g = gen
         q.async {
+            let t0 = CFAbsoluteTimeGetCurrent()
             let base = self.qBaseId == id ? self.qBase : nil
             let cg = DevelopEngine.shared.display(src, r, base: base, maxPixel: px, skipCrop: skip, rot: rot)
+            let t1 = CFAbsoluteTimeGetCurrent()
             let hist = cg.map(Histogram.make) ?? []
+            Timing.note(String(format: "develop: drawn %dpx (histogram %.0f ms)", px, (CFAbsoluteTimeGetCurrent() - t1) * 1000), since: t0, always: true)
             DispatchQueue.main.async {
                 self.rendering = false
                 if g == self.gen, let cg {

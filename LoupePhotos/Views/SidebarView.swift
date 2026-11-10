@@ -10,7 +10,7 @@ struct DateNode: Identifiable, Hashable {
     let id: String; let name: String; let count: Int; let level: Int; let source: Source
     var children: [DateNode]?
 }
-struct RecentDay { let key: String; let title: String; let y: Int; let m: Int; let d: Int; let count: Int }
+struct RecentDay: Equatable { let key: String; let title: String; let y: Int; let m: Int; let d: Int; let count: Int }
 
 /// A label with or without its icon (date rows show the icon only at the top two levels).
 /// Built from the label's own parts rather than by borrowing another style — Xcode warned about that.
@@ -214,7 +214,9 @@ struct SidebarView: View {
         // while Background Tasks run, the library changes all the time: recount at most every 3 seconds then
         .task(id: lib.version) {
             let busy = !Activity.shared.jobs.isEmpty
-            let wait = busy ? max(0.25, 3 - Date().timeIntervalSince(lastBuilt)) : 0.25
+            // face names arriving as People keywords: catch up every 15 seconds, not after each one
+            let gap: Double = lib.onlyBackgroundSince(treeKey) ? 15 : busy ? 3 : 0
+            let wait = max(0.25, gap - Date().timeIntervalSince(lastBuilt))
             try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
             if !Task.isCancelled { rebuild(); lastBuilt = Date() }
         }
@@ -468,9 +470,10 @@ struct SidebarView: View {
         treeKey = lib.version
         let full = structSeen != lib.structKey && touched == nil
         if touched == nil { structSeen = lib.structKey }
-        let doKeywords = full || touched?.fields.contains("keywords") == true
+        // (too many changes to know which: keywords and places are counted again too)
+        let doKeywords = full || touched == nil || touched?.fields.contains("keywords") == true
         // place names arriving (one every second or so while they're looked up): just the Places list, not everything
-        let doPlaces = full || touched?.fields.contains("place") == true
+        let doPlaces = full || touched == nil || touched?.fields.contains("place") == true
         // smart collection counts check every photo against every rule: when something big changed, or every 30 seconds
         let doSmart = full || Date().timeIntervalSince(smartAt) > 30
         if doSmart { smartAt = Date() }
@@ -481,20 +484,28 @@ struct SidebarView: View {
             let r = SidebarData.make(lib, keywords: doKeywords, tree: full, smart: doSmart, places: doPlaces)
             Timing.note("sidebar rebuilt (background)", since: t0)
             DispatchQueue.main.async {
-                libCounts = r.libCounts; markNodes = r.markNodes
+                // only what actually changed is handed over: each new list makes the sidebar compare every row again
+                if libCounts != r.libCounts { libCounts = r.libCounts }
+                if markNodes != r.markNodes { markNodes = r.markNodes }
                 if doSmart {
-                    for (k, v) in r.smartCounts { smartCounts[k] = v }
+                    for (k, v) in r.smartCounts where smartCounts[k] != v { smartCounts[k] = v }
                     // search and people collections: one at a time, so the window stays responsive
                     let rest = lib.albums.filter { $0.type == "smart" && Library.smartNeedsMain($0) }
                     // (not in the first seconds after opening, while the grid and People are getting ready)
                     let wait = max(0, 12 - Date().timeIntervalSince(lib.openedAt))
                     for (n, a) in rest.enumerated() {
-                        DispatchQueue.main.asyncAfter(deadline: .now() + wait + 0.3 * Double(n + 1)) { smartCounts[a.id] = lib.smartPhotos(a).count }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + wait + 0.3 * Double(n + 1)) { let c = lib.smartPhotos(a).count; if smartCounts[a.id] != c { smartCounts[a.id] = c } }
                     }
                 }
-                if doKeywords { keyCounts = r.keyCounts; keyTree = r.keyTree }
-                if doPlaces { places = r.places }
-                if full { tree = r.tree; counts = r.counts; noDate = r.noDate; dates = r.dates; recent = r.recent }
+                if doKeywords { if keyCounts != r.keyCounts { keyCounts = r.keyCounts }; if keyTree != r.keyTree { keyTree = r.keyTree } }
+                if doPlaces, places != r.places { places = r.places }
+                if full {
+                    if tree != r.tree { tree = r.tree }
+                    if counts != r.counts { counts = r.counts }
+                    if noDate != r.noDate { noDate = r.noDate }
+                    if dates != r.dates { dates = r.dates }
+                    if recent != r.recent { recent = r.recent }
+                }
                 building = false
                 if buildAgain { buildAgain = false; rebuild() }
             }
@@ -672,11 +683,11 @@ struct OptionalTag: ViewModifier {
     }
 }
 
-struct PlaceNode: Identifiable { let id: String; let name: String; let count: Int; let source: Source; let children: [PlaceNode]? }
+struct PlaceNode: Identifiable, Equatable { let id: String; let name: String; let count: Int; let source: Source; let children: [PlaceNode]? }
 
-struct MarkNode: Identifiable { let id: String; let name: String; let icon: String; let hex: UInt32?; let count: Int?; let source: Source?; let children: [MarkNode]? }
+struct MarkNode: Identifiable, Equatable { let id: String; let name: String; let icon: String; let hex: UInt32?; let count: Int?; let source: Source?; let children: [MarkNode]? }
 
-struct KeyNode: Identifiable { let id: String; let name: String; let children: [KeyNode]? }
+struct KeyNode: Identifiable, Equatable { let id: String; let name: String; let children: [KeyNode]? }
 
 /// Import… and Export… at the foot of the sidebar, as in Lightroom Classic. They stay put while the sidebar scrolls.
 struct SidebarActions: View {

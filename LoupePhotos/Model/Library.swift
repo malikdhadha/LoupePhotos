@@ -54,6 +54,20 @@ final class Library {
     /// since those changes no longer make every view list the whole library again).
     @ObservationIgnored var placeVersion = 0
     /// The photos touched since version `v`, if every change since then was metadata-only (nil = redraw everything).
+    /// Changes made by background work rather than by you (face names written as People keywords).
+    @ObservationIgnored var autoVersions = Set<Int>()
+    func markAutomatic() {
+        autoVersions.insert(version)
+        if autoVersions.count > 600 { let floor = version - 400; autoVersions = autoVersions.filter { $0 > floor } }
+    }
+    /// Every change since `v` came from background work: face names, faces found, thumbnails remade.
+    /// The sidebar then catches up every 15 seconds instead of after each one.
+    func onlyBackgroundSince(_ v: Int) -> Bool {
+        guard v >= 0, v < version else { return false }
+        let newer = metaLog.filter { $0.v > v }
+        guard newer.count == version - v else { return false }
+        return newer.allSatisfy { autoVersions.contains($0.v) || $0.fields.isSubset(of: ["faces", "look"]) }
+    }
     func touchedSince(_ v: Int) -> (ids: Set<Int>, fields: Set<String>)? {
         guard v >= 0, v <= version else { return nil }
         let newer = metaLog.filter { $0.v > v }
@@ -66,14 +80,14 @@ final class Library {
     func lookChanged(_ photoIds: Set<Int>) {
         version += 1; metaBumps += 1
         metaLog.append((version, photoIds, ["look"]))
-        if metaLog.count > 40 { metaLog.removeFirst(metaLog.count - 40) }
+        if metaLog.count > 400 { metaLog.removeFirst(metaLog.count - 400) }
     }
     @ObservationIgnored var peopleVersion = 0
     func facesChanged(_ photoIds: Set<Int>) {
         peopleVersion += 1
         version += 1; metaBumps += 1
         metaLog.append((version, photoIds, ["faces"]))
-        if metaLog.count > 40 { metaLog.removeFirst(metaLog.count - 40) }
+        if metaLog.count > 400 { metaLog.removeFirst(metaLog.count - 400) }
     }
     var name = ""
     var loaded = false
@@ -260,7 +274,7 @@ final class Library {
         if Set(fields).isSubset(of: Library.metaFields) {
             metaBumps += 1
             metaLog.append((version, Set(ps.map(\.id)), Set(fields)))
-            if metaLog.count > 40 { metaLog.removeFirst(metaLog.count - 40) }
+            if metaLog.count > 400 { metaLog.removeFirst(metaLog.count - 400) }
         }
         if converting { convertTouched.formUnion(ps.map(\.id)) }
         // Settings ▸ Metadata ▸ "Write changes into XMP": the files follow the catalog
@@ -527,7 +541,7 @@ final class Library {
         case .all, .rejected: base = photos
         case .flagged: base = photos.filter { $0.quickFlag }
         case .recent: let la = lastAdded; base = photos.filter { $0.quickAdded == la }
-        case .folder(let path): let pre = path + "/"; base = photos.filter { $0.quickPath.hasPrefix(pre) }
+        case .folder(let path): let pre = Array((path + "/").utf8); base = photos.filter { $0.quickPath.utf8.starts(with: pre) }   // bytes: far quicker than hasPrefix
         case .album(let id):
             if let a = albums.first(where: { $0.id == id }), a.type == "smart" { let test = smartTest(a, smartPre(a)); base = photos.filter { test($0) } }
             else { base = (albums.first { $0.id == id }?.ids ?? []).compactMap { byId[$0] } }

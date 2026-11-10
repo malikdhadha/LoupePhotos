@@ -237,7 +237,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = app.loupephotos.mac;
 				PRODUCT_NAME = "Loupe Photos";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -265,7 +265,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.1;
+				MARKETING_VERSION = 1.2;
 				PRODUCT_BUNDLE_IDENTIFIER = app.loupephotos.mac;
 				PRODUCT_NAME = "Loupe Photos";
 				SWIFT_EMIT_LOC_STRINGS = YES;

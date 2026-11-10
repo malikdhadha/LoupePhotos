@@ -379,7 +379,7 @@ final class FaceIndex {
             for k in want.subtracting(have).sorted() { p.keywords.append(k) }
             touched.append(p)
         }
-        if !touched.isEmpty { lib.changed(touched, ["keywords"]) }
+        if !touched.isEmpty { lib.changed(touched, ["keywords"]); lib.markAutomatic() }
     }
 
     // MARK: Summary — a person's best photos across the years (like Apple Photos)
