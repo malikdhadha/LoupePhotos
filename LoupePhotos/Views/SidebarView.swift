@@ -414,7 +414,9 @@ struct SidebarView: View {
                     lib.removeLibraryFolder(r)
                 }
             }
-        } else if lib.folderIsEmpty(path) {
+        // (a folder with photos in the catalog isn't empty — the disk is only asked about folders with none,
+        //  because this menu is made whenever the row is drawn, and reading a big folder froze the window)
+        } else if (counts[path] ?? 0) == 0 && lib.folderIsEmpty(path) {
             Button("Move Empty Folder to Trash") { lib.trashFolder(path); if ui.source == .folder(path) { ui.source = .all } }
         } else {
             Button("Move Folder to Trash…") {

@@ -91,8 +91,14 @@ extension Library {
 
     /// Only empty folders can be thrown away from here (into the Trash, so it can be undone in Finder).
     func folderIsEmpty(_ path: String) -> Bool {
-        let items = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? ["?"]
-        return items.allSatisfy { $0 == ".DS_Store" }
+        // stops at the first real item instead of listing the whole folder
+        guard let d = opendir(path) else { return false }
+        defer { closedir(d) }
+        while let e = readdir(d) {
+            let name = withUnsafeBytes(of: e.pointee.d_name) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
+            if name != "." && name != ".." && name != ".DS_Store" { return false }
+        }
+        return true
     }
     func trashFolder(_ path: String) {
         guard folderIsEmpty(path), !isRoot(path) else { return }
